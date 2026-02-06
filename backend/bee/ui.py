@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import threading
 import tkinter as tk
@@ -35,6 +36,16 @@ class BeeUI(tk.Tk):
         self.goal_vars = [tk.StringVar(), tk.StringVar(), tk.StringVar()]
 
         self.memory_query = tk.StringVar()
+
+        self.meta_vars = {
+            "group_id": tk.StringVar(),
+            "scene": tk.StringVar(value="assistant"),
+            "name": tk.StringVar(),
+            "description": tk.StringVar(),
+            "scene_desc": tk.StringVar(),
+            "timezone": tk.StringVar(),
+            "tags": tk.StringVar(),
+        }
 
         self._build_ui()
         self.refresh_status()
@@ -91,6 +102,56 @@ class BeeUI(tk.Tk):
         )
         goals_frame.columnconfigure(0, weight=1)
 
+        meta_frame = ttk.LabelFrame(root, text="Conversation Meta", padding=12)
+        meta_frame.pack(fill=tk.X, pady=(0, 12))
+        ttk.Label(meta_frame, text="Group ID").grid(row=0, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["group_id"]).grid(
+            row=0, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="Scene").grid(row=1, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["scene"]).grid(
+            row=1, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="Name").grid(row=2, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["name"]).grid(
+            row=2, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="Description").grid(row=3, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["description"]).grid(
+            row=3, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="Scene Desc").grid(row=4, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["scene_desc"]).grid(
+            row=4, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="Timezone").grid(row=5, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["timezone"]).grid(
+            row=5, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="Tags (comma)").grid(row=6, column=0, sticky="w")
+        ttk.Entry(meta_frame, textvariable=self.meta_vars["tags"]).grid(
+            row=6, column=1, sticky="ew", padx=(0, 8)
+        )
+        ttk.Label(meta_frame, text="User Details (JSON)").grid(
+            row=7, column=0, sticky="nw", pady=(6, 0)
+        )
+        self.meta_user_details = tk.Text(meta_frame, height=6, wrap="word")
+        self.meta_user_details.grid(
+            row=7, column=1, sticky="ew", padx=(0, 8), pady=(6, 0)
+        )
+        meta_actions = ttk.Frame(meta_frame)
+        meta_actions.grid(row=0, column=2, rowspan=8, sticky="ne")
+        ttk.Button(meta_actions, text="Load", command=self.load_conversation_meta).pack(
+            fill=tk.X, pady=(0, 6)
+        )
+        ttk.Button(meta_actions, text="Save", command=self.save_conversation_meta).pack(
+            fill=tk.X, pady=(0, 6)
+        )
+        ttk.Button(meta_actions, text="Update", command=self.patch_conversation_meta).pack(
+            fill=tk.X
+        )
+        meta_frame.columnconfigure(1, weight=1)
+
         memory_frame = ttk.LabelFrame(root, text="Memory Search", padding=12)
         memory_frame.pack(fill=tk.BOTH, expand=True)
         entry = ttk.Entry(memory_frame, textvariable=self.memory_query)
@@ -123,7 +184,10 @@ class BeeUI(tk.Tk):
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         url = f"{BASE_URL}{path}"
         with httpx.Client(timeout=20) as client:
-            resp = client.request(method, url, json=payload)
+            if method.upper() == "GET":
+                resp = client.request(method, url, params=payload)
+            else:
+                resp = client.request(method, url, json=payload)
             resp.raise_for_status()
             return resp.json()
 
@@ -138,6 +202,8 @@ class BeeUI(tk.Tk):
         self.status_vars["evermem"].set("Connected" if data.get("evermem_enabled") else "Disabled")
         self.status_vars["endpoint"].set(data.get("evermem_endpoint") or "Not set")
         self.status_vars["group"].set(data.get("evermem_group_id") or "Default")
+        if not self.meta_vars["group_id"].get():
+            self.meta_vars["group_id"].set(data.get("evermem_group_id") or "")
 
         self.risk_var.set(int(data.get("risk_tolerance", 5)))
         self.risk_label.set(str(self.risk_var.get()))
@@ -173,26 +239,195 @@ class BeeUI(tk.Tk):
 
         self._run_async(lambda: self._request("POST", "/api/memory/goals", payload), handle)
 
+    def load_conversation_meta(self) -> None:
+        payload = {"group_id": self.meta_vars["group_id"].get().strip() or None}
+
+        def handle(data: dict) -> None:
+            if not data.get("ok"):
+                messagebox.showerror("B.E.E", "Failed to load conversation meta.")
+                return
+            wrapper = data.get("result", {})
+            meta = wrapper.get("result") if isinstance(wrapper, dict) else None
+            if not isinstance(meta, dict):
+                meta = wrapper if isinstance(wrapper, dict) else {}
+
+            self.meta_vars["group_id"].set(meta.get("group_id") or "")
+            self.meta_vars["scene"].set(meta.get("scene") or "")
+            self.meta_vars["name"].set(meta.get("name") or "")
+            self.meta_vars["description"].set(meta.get("description") or "")
+
+            scene_desc = meta.get("scene_desc") or {}
+            if isinstance(scene_desc, dict):
+                self.meta_vars["scene_desc"].set(scene_desc.get("description") or json.dumps(scene_desc))
+            else:
+                self.meta_vars["scene_desc"].set(str(scene_desc))
+
+            self.meta_vars["timezone"].set(meta.get("default_timezone") or "")
+
+            tags = meta.get("tags") or []
+            if isinstance(tags, list):
+                self.meta_vars["tags"].set(", ".join([str(t) for t in tags]))
+            else:
+                self.meta_vars["tags"].set(str(tags))
+
+            details = meta.get("user_details") or {}
+            if isinstance(details, dict) and details:
+                self.meta_user_details.delete("1.0", tk.END)
+                self.meta_user_details.insert(tk.END, json.dumps(details, indent=2))
+            else:
+                self.meta_user_details.delete("1.0", tk.END)
+
+        self._run_async(
+            lambda: self._request("GET", "/api/evermem/conversation-meta", payload),
+            handle,
+        )
+
+    def _parse_meta_user_details(self) -> dict | None:
+        raw = self.meta_user_details.get("1.0", tk.END).strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            messagebox.showerror("B.E.E", "User Details must be valid JSON.")
+            return None
+        if not isinstance(parsed, dict):
+            messagebox.showerror("B.E.E", "User Details JSON must be an object.")
+            return None
+        return parsed
+
+    def _parse_meta_tags(self) -> list[str] | None:
+        raw = self.meta_vars["tags"].get().strip()
+        if not raw:
+            return None
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+    def save_conversation_meta(self) -> None:
+        user_details = self._parse_meta_user_details()
+        if user_details is None and self.meta_user_details.get("1.0", tk.END).strip():
+            return
+
+        scene_desc = self.meta_vars["scene_desc"].get().strip()
+        payload = {
+            "group_id": self.meta_vars["group_id"].get().strip() or None,
+            "scene": self.meta_vars["scene"].get().strip() or None,
+            "scene_desc": {"description": scene_desc} if scene_desc else None,
+            "name": self.meta_vars["name"].get().strip() or None,
+            "description": self.meta_vars["description"].get().strip() or None,
+            "default_timezone": self.meta_vars["timezone"].get().strip() or None,
+            "tags": self._parse_meta_tags(),
+            "user_details": user_details,
+        }
+
+        def handle(data: dict) -> None:
+            if data.get("ok"):
+                messagebox.showinfo("B.E.E", "Conversation meta saved.")
+            else:
+                messagebox.showerror("B.E.E", "Failed to save conversation meta.")
+
+        self._run_async(
+            lambda: self._request("POST", "/api/evermem/conversation-meta", payload),
+            handle,
+        )
+
+    def patch_conversation_meta(self) -> None:
+        user_details = self._parse_meta_user_details()
+        if user_details is None and self.meta_user_details.get("1.0", tk.END).strip():
+            return
+
+        payload: dict[str, Any] = {
+            "group_id": self.meta_vars["group_id"].get().strip() or None
+        }
+        name = self.meta_vars["name"].get().strip()
+        if name:
+            payload["name"] = name
+        description = self.meta_vars["description"].get().strip()
+        if description:
+            payload["description"] = description
+        scene_desc = self.meta_vars["scene_desc"].get().strip()
+        if scene_desc:
+            payload["scene_desc"] = {"description": scene_desc}
+        timezone = self.meta_vars["timezone"].get().strip()
+        if timezone:
+            payload["default_timezone"] = timezone
+        tags = self._parse_meta_tags()
+        if tags is not None:
+            payload["tags"] = tags
+        if user_details is not None:
+            payload["user_details"] = user_details
+
+        def handle(data: dict) -> None:
+            if data.get("ok"):
+                messagebox.showinfo("B.E.E", "Conversation meta updated.")
+            else:
+                messagebox.showerror("B.E.E", "Failed to update conversation meta.")
+
+        self._run_async(
+            lambda: self._request("PATCH", "/api/evermem/conversation-meta", payload),
+            handle,
+        )
+
     def search_memory(self) -> None:
         query = self.memory_query.get().strip()
         if not query:
             return
 
-        payload = {"search_query": query, "result_limit": 6}
+        payload = {"query": query, "top_k": 6}
+
+        def extract_rows(result: dict) -> list[tuple[str, str, str]]:
+            rows: list[tuple[str, str, str]] = []
+            memory_list = result.get("memory_list")
+            if isinstance(memory_list, list):
+                for idx, item in enumerate(memory_list, start=1):
+                    if not isinstance(item, dict):
+                        continue
+                    title = item.get("title") or f"Memory {idx}"
+                    content = item.get("content") or ""
+                    stamp = item.get("create_time") or ""
+                    rows.append((title, content, stamp))
+                return rows
+
+            memories = result.get("memories", [])
+            if isinstance(memories, list):
+                for group in memories:
+                    if not isinstance(group, dict):
+                        continue
+                    for mem_type, items in group.items():
+                        if not isinstance(items, list):
+                            continue
+                        for entry in items:
+                            if not isinstance(entry, dict):
+                                continue
+                            title = entry.get("title") or entry.get("summary") or mem_type or "Memory"
+                            content = entry.get("content") or entry.get("summary") or ""
+                            stamp = entry.get("timestamp") or entry.get("create_time") or ""
+                            rows.append((title, content, stamp))
+
+            pending = result.get("pending_messages", [])
+            if isinstance(pending, list):
+                for entry in pending:
+                    if not isinstance(entry, dict):
+                        continue
+                    content = entry.get("content") or ""
+                    stamp = entry.get("message_create_time") or entry.get("created_at") or ""
+                    if content:
+                        rows.append(("Pending message", content, stamp))
+
+            return rows
 
         def handle(data: dict) -> None:
             self.memory_text.delete("1.0", tk.END)
             if not data.get("ok"):
                 self.memory_text.insert(tk.END, "Search failed.\n")
                 return
-            results = data.get("result", {}).get("memory_list", [])
-            if not results:
+            outer = data.get("result", {})
+            inner = outer.get("result") if isinstance(outer, dict) else None
+            result = inner if isinstance(inner, dict) else (outer if isinstance(outer, dict) else {})
+            rows = extract_rows(result)
+            if not rows:
                 self.memory_text.insert(tk.END, "No results.\n")
                 return
-            for idx, item in enumerate(results, start=1):
-                title = item.get("title") or f"Memory {idx}"
-                content = item.get("content") or ""
-                stamp = item.get("create_time") or ""
+            for title, content, stamp in rows:
                 self.memory_text.insert(tk.END, f"{title}\n{content}\n{stamp}\n\n")
 
         self._run_async(lambda: self._request("POST", "/api/evermem/search", payload), handle)

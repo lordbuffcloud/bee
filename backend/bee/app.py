@@ -12,6 +12,8 @@ from bee.models import (
     StatusResponse,
     EvermemAddRequest,
     EvermemSearchRequest,
+    EvermemConversationMetaRequest,
+    EvermemConversationMetaPatchRequest,
     WebSearchRequest,
     WebScrapeRequest,
     YouTubeTranscribeRequest,
@@ -73,6 +75,7 @@ def create_app() -> FastAPI:
             app.state.telegram_task = bot.run_in_background()
 
         if evermem.enabled:
+            await evermem.ensure_conversation_meta()
             goals = await evermem.fetch_goals()
             if goals:
                 await state.set_goals(goals)
@@ -139,26 +142,65 @@ def create_app() -> FastAPI:
         result = await evermem.add_memory(
             content=payload.content,
             message_id=payload.message_id,
-            create_time_ms=payload.create_time,
+            create_time=payload.create_time,
             sender=payload.sender,
             sender_name=payload.sender_name,
             role=payload.role,
-            scene=payload.scene,
             group_id=payload.group_id,
             group_name=payload.group_name,
             refer_list=payload.refer_list,
-            flush=payload.flush,
         )
         return {"ok": bool(result), "result": result}
 
     @app.post("/api/evermem/search")
     async def search_memories(payload: EvermemSearchRequest) -> dict:
+        query = payload.query or payload.search_query
+        top_k = payload.top_k if payload.top_k is not None else payload.result_limit
         result = await evermem.search_memories(
-            payload.search_query,
-            result_limit=payload.result_limit,
+            query,
+            user_id=payload.user_id,
             group_id=payload.group_id,
-            group_name=payload.group_name,
-            timeout=payload.timeout,
+            memory_types=payload.memory_types,
+            top_k=top_k,
+            retrieve_method=payload.retrieve_method,
+            include_metadata=payload.include_metadata,
+            start_time=payload.start_time,
+            end_time=payload.end_time,
+            radius=payload.radius,
+            current_time=payload.current_time,
+        )
+        return {"ok": bool(result), "result": result}
+
+    @app.get("/api/evermem/conversation-meta")
+    async def get_conversation_meta(group_id: str | None = None) -> dict:
+        result = await evermem.get_conversation_meta(group_id=group_id)
+        return {"ok": bool(result), "result": result}
+
+    @app.post("/api/evermem/conversation-meta")
+    async def save_conversation_meta(payload: EvermemConversationMetaRequest) -> dict:
+        result = await evermem.save_conversation_meta(
+            scene=payload.scene,
+            scene_desc=payload.scene_desc,
+            name=payload.name,
+            description=payload.description,
+            group_id=payload.group_id,
+            created_at=payload.created_at,
+            default_timezone=payload.default_timezone,
+            user_details=payload.user_details,
+            tags=payload.tags,
+        )
+        return {"ok": bool(result), "result": result}
+
+    @app.patch("/api/evermem/conversation-meta")
+    async def patch_conversation_meta(payload: EvermemConversationMetaPatchRequest) -> dict:
+        result = await evermem.patch_conversation_meta(
+            group_id=payload.group_id,
+            name=payload.name,
+            description=payload.description,
+            scene_desc=payload.scene_desc,
+            tags=payload.tags,
+            user_details=payload.user_details,
+            default_timezone=payload.default_timezone,
         )
         return {"ok": bool(result), "result": result}
 

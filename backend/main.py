@@ -1,5 +1,10 @@
-from bee.app import create_app
 import uvicorn
+from dotenv import find_dotenv, load_dotenv
+
+from bee.app import create_app
+
+
+load_dotenv(find_dotenv())
 
 app = create_app()
 
